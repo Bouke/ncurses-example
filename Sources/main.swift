@@ -1,0 +1,3 @@
+import CNCurses
+
+initscr()
