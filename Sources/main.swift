@@ -22,7 +22,9 @@ trap(.INT) { signal in
     exit(1)
 }
 trap(.WINCH) { signal in
-    // handle resize
+    endwin()
+    print("resizes are not supported, quitting")
+    exit(1)
 }
 
 @discardableResult
@@ -40,61 +42,86 @@ func mvprintw(y:Int32, x:Int32, str:String) -> Int32 {
 initscr();          /* Start curses mode        */
 cbreak()
 keypad(stdscr, true);       /* We get F1, F2 etc..      */
-//noecho();           /* Don't echo() while we do getch */
-
-//mousemask(NC_ALL_MOUSE_EVENTS | NC_REPORT_MOUSE_POSITION, nil)
-
-//while true {
-//    var c = wgetch(stdscr)
-// 
-//    // Exit the program on new line feed
-//    if (c == 10) {
-//      break;
-//    }
-// 
-////    move(0, 0)
-//    if (c == ERR) {
-//        printw("Nothing happened")
-//    } else if (c == KEY_MOUSE) {
-//        var event = MEVENT()
-////      var event: UnsafeMutablePointer<MEVENT>? = nil
-//      if (getmouse(&event) == OK) {
-//        // snprintf(buffer, max_size, "Mouse at row=%d, column=%d bstate=0x%08lx",
-//        //          event.y, event.x, event.bstate);
-////        event?.pointee.
-//        printw("Mouse at \(event.y), \(event.x), \(event.bstate)")
-//      }
-//      else {
-//        printw("Got bad mouse event.")
-//      }
-//    }
-//    else {
-//      printw("Pressed key \(c) (\(keyname(c)))")
-//    }
-//
-//    clrtoeol()
-//    refresh()
-//  }
-
-  // printf("\033[?1003l\n"); // Disable mouse movement events, as l = low
 
 start_color()
-init_pair(1, Int16(COLOR_WHITE), Int16(COLOR_BLUE))
+init_pair(1, Int16(COLOR_WHITE), Int16(COLOR_MAGENTA))
 init_pair(2, Int16(COLOR_WHITE), Int16(COLOR_RED))
+init_pair(3, Int16(COLOR_BLACK), Int16(COLOR_WHITE))
+init_pair(4, Int16(COLOR_RED), Int16(COLOR_WHITE))
 
 bkgd(chtype(COLOR_PAIR(1)))
-border(0, 0, 0, 0, 0, 0, 0, 0)
-
-mvaddstr(2, 2, "What would you like to do today?")
+clear()
 refresh()
 
-attron(COLOR_PAIR(2))
-mvaddstr(10, 10, String(repeating: " ", count: 60))
-var input = Data(count: 60)
-_ = input.withUnsafeMutableBytes {
-    mvgetnstr(10, 10, $0, Int32(input.count))
+func prompt(title: String, message: String) -> String? {
+    let promptXY = renderPrompt(title: title, message: message)
+
+    var input = Data(count: Int(promptXY.width))
+    _ = input.withUnsafeMutableBytes {
+        mvwgetnstr(promptXY.win, promptXY.y, promptXY.x, $0, promptXY.width)
+    }
+
+    return String(data: input, encoding: .utf8)
 }
 
-endwin();
+func renderPrompt(title: String, message: String) -> (win: OpaquePointer, y: Int32, x: Int32, width: Int32) {
+    let marginX: Int32 = 3
+    let paddingX: Int32 = 1
+    let width: Int32 = getmaxx(stdscr) - 2 * marginX
+    let innerWidth = width - 2 - 2 * paddingX
 
-print(String(data: input, encoding: .utf8) ?? "unparseable")
+    var text = message
+    wrapText(&text, at: Int(innerWidth))
+    let lines = text.components(separatedBy: .newlines)
+
+    let paddingY: Int32 = 1
+    let innerHeight = Int32(lines.count) + 4
+    let height = innerHeight + 4
+    let marginY = (getmaxy(stdscr) - height) / 2
+
+    let win = newwin(height, width, marginY, marginX)!
+
+    wbkgd(win, chtype(COLOR_PAIR(3)))
+    box(win, 0, 0)
+    for (i, line) in lines.enumerated() {
+        mvwaddstr(win, 1 + paddingY + Int32(i), 1 + paddingX, line)
+    }
+
+    let titleX = (width - title.utf8.count) / 2
+    mvwaddstr(win, 0, titleX - 2, "| ")
+    mvwaddstr(win, 0, titleX + title.utf8.count, " |")
+
+    mvwaddstr(win, innerHeight + 1, 6, "<Go Back>")
+    mvwaddstr(win, innerHeight + 1, innerWidth - 12, "<Continue>")
+
+    wattron(win, COLOR_PAIR(4))
+    mvwaddstr(win, 0, titleX, title)
+
+    wattron(win, COLOR_PAIR(1))
+    let inputY = innerHeight - 1
+    mvwaddstr(win, inputY, 1 + paddingX, String(repeating: "_", count: Int(innerWidth)))
+
+    wrefresh(win)
+    return (win, inputY, 1 + paddingX, innerWidth)
+}
+
+func wrapText(_ text: inout String, at width: Int) {
+    var startIndex = text.startIndex
+    while startIndex < text.endIndex {
+        guard let endIndex = text.index(startIndex, offsetBy: width, limitedBy: text.endIndex) else {
+            return
+        }
+        let range = Range<String.Index>(uncheckedBounds: (startIndex, endIndex))
+        if let newline = text.rangeOfCharacter(from: .newlines, options: [.backwards], range: range) {
+            startIndex = newline.upperBound
+            continue
+        }
+        let space = text.rangeOfCharacter(from: .whitespaces, options: [.backwards], range: range)!
+        text.replaceSubrange(space, with: "\n")
+        startIndex = space.upperBound
+    }
+}
+
+_ = prompt(title: "[!] Configure the network", message: "Please enter the hostname for this system.\n\nThe hostname is a single word that identifies your system to the network. If you don't know what your hostname should be, consult your network administrator. If you are setting up your own home network, you can make something up here.\n\nHostname:")
+
+endwin();
